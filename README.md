@@ -1,4 +1,4 @@
-# Voting Backend
+# Voting Server
 
 ## How to use 
 + pip install

@@ -1,7 +1,7 @@
 # Voting Server
 
 ## How to use 
-+ pip install
++ pip install -r requirements.txt
 
 ## Run
 

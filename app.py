@@ -50,7 +50,6 @@ def create_voting():
     status = data.get('status')
     created_by = data.get('created_by')
     voting_options = data.get('voting_options', [])
-
     if not all([voting_name, voting_description, status, created_by]):
         return jsonify({'message': 'Missing required fields'}), 400
 
@@ -96,7 +95,7 @@ def create_voting():
 
         conn.commit()
 
-        return jsonify({'message': 'Voting created successfully', 'voting_id': voting_id}), 201
+        return jsonify({'message': 'Voting created successfully', 'voting_id': voting_id}), 200
     except Exception as e:
         conn.rollback()
         return jsonify({'message': str(e)}), 500
@@ -108,9 +107,8 @@ def create_voting():
 
 # API-3
 # 用户查看投票列表
-@app.route('/voting-lists', methods=['POST'])
+@app.route('/voting-lists', methods=['GET'])
 def voting_lists():
-    print(11111111111111)
     if request.method == 'GET':
         user_id = request.args.get('user_id')
     elif request.method == 'POST':
@@ -121,7 +119,6 @@ def voting_lists():
 
     conn = get_db_connection()
     cur = conn.cursor()
-
     try:
         # 检查用户是否有投票权限
         cur.execute('SELECT has_vote_permission FROM Users WHERE user_id = %s', (user_id,))
@@ -136,6 +133,7 @@ def voting_lists():
         cur.execute('''
             SELECT voting_id, voting_name, voting_date, create_user_id
             FROM Votings
+            WHERE delete_status = 'N'
         ''')
         votings = cur.fetchall()
         print(votings)
@@ -203,10 +201,10 @@ def get_vote_results():
     if request.method == 'POST':
         data = request.get_json()
         voting_id = data.get('voting_id')
-        user_id = data.get('user_id')  # 假设 user_id 也需要处理
+        user_id = data.get('user_id')
     elif request.method == 'GET':
         voting_id = request.args.get('voting_id')
-        user_id = request.args.get('user_id')  # 假设 user_id 也需要处理
+        user_id = request.args.get('user_id')
 
     if not voting_id:
         return jsonify({"error": "voting_id is required"}), 400
@@ -215,25 +213,79 @@ def get_vote_results():
     cur = conn.cursor()
 
     try:
-        query = """
-        SELECT result_id, voting_id, option_id, list_id, vote_count, list_percentage, last_updated
-        FROM VoteResults
-        WHERE voting_id = %s
-        """
-        cur.execute(query, (voting_id,))
-        results = cur.fetchall()
+        # Get voting information
+        cur.execute("""
+            SELECT v.voting_id, v.voting_name, v.voting_description, v.voting_date,
+                   COUNT(DISTINCT vt.user_id) as total_voters
+            FROM Votings v
+            LEFT JOIN Votes vt ON v.voting_id = vt.voting_id
+            WHERE v.voting_id = %s
+            GROUP BY v.voting_id
+        """, (voting_id,))
+        voting_info = cur.fetchone()
 
-        results_dict = []
-        for result in results:
-            results_dict.append({
-                'result_id': result[0],
-                'voting_id': result[1],
-                'option_id': result[2],
-                'list_id': result[3],
-                'vote_count': result[4],
-                'list_percentage': result[5],
-                'last_updated': result[6].strftime('%Y-%m-%d %H:%M:%S')
-            })
+        if not voting_info:
+            return jsonify({"error": "Voting not found"}), 404
+
+        # Get voting options and results
+        cur.execute("""
+            SELECT 
+                vo.option_id,
+                vo.option_title,
+                vo.option_type,
+                ol.list_id,
+                ol.list_title,
+                COALESCE(vr.vote_count, 0) as vote_count,
+                COALESCE(vr.list_percentage, 0) as list_percentage
+            FROM VotingOptions vo
+            LEFT JOIN OptionList ol ON vo.option_id = ol.option_id
+            LEFT JOIN VoteResults vr ON (vo.option_id = vr.option_id AND ol.list_id = vr.list_id)
+            WHERE vo.voting_id = %s
+            ORDER BY vo.option_id, ol.list_id
+        """, (voting_id,))
+        options = cur.fetchall()
+
+        # Format response according to the API documentation
+        response = {
+            "voting_id": voting_info[0],
+            "voting_numbers": voting_info[4],  # total voters
+            "voting_name": voting_info[1],
+            "voting_description": voting_info[2],
+            "voting_date": voting_info[3].strftime('%Y-%m-%d'),
+            "voting_options": []
+        }
+
+        current_option = None
+        for option in options:
+            if current_option is None or current_option["option_id"] != str(option[0]):
+                if current_option is not None:
+                    response["voting_options"].append(current_option)
+                
+                current_option = {
+                    "option_id": str(option[0]),
+                    "option_title": option[1],
+                    "option_type": option[2],
+                    "option_text": None,  # Set to null by default
+                    "option_list": []
+                }
+                
+                # Set option_text if type is "text"
+                if option[2] == "text":
+                    # You might need to modify this part based on how you store text responses
+                    current_option["option_text"] = ""
+
+            if option[2] != "text":
+                current_option["option_list"].append({
+                    "list_id": str(option[3]),
+                    "list_title": option[4],
+                    "list_percentage": f"{option[6]:.1f}"  # Format percentage to string
+                })
+
+        # Add the last option
+        if current_option is not None:
+            response["voting_options"].append(current_option)
+
+        return jsonify(response), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -241,11 +293,9 @@ def get_vote_results():
         cur.close()
         conn.close()
 
-    return jsonify(results_dict), 200
-
 # API-5
 # 投票
-@app.route('/submit_vote', methods=['POST'])
+@app.route('/submit-vote', methods=['POST'])
 def submit_vote():
     data = request.get_json()
     user_id = data.get('user_id')
@@ -265,15 +315,15 @@ def submit_vote():
             WHERE user_id = %s AND voting_id = %s AND is_voted = TRUE
         """, (user_id, voting_id))
         vote_count = cursor.fetchone()[0]
+        print("vote_count", vote_count)
 
         if vote_count > 0:
             return jsonify({"error": "User has already voted"}), 400
-
         # 插入投票记录
         for vote in votes:
-            option_id = vote.get('option_id')
-            option_values = vote.get('option_value')
-
+            option_id = vote.get('option_id') # 1
+            option_values = vote.get('option_value') # [2] 
+            
             if isinstance(option_values, str):
                 option_values = [option_values]
 
@@ -288,14 +338,23 @@ def submit_vote():
                     INSERT INTO Votes (user_id, voting_id, option_id, list_id, is_voted, vote_date, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (user_id, voting_id, option_id, list_id, True, datetime.now(), datetime.now()))
-
+                 
                 # 更新 VoteResults 表
                 cursor.execute("""
-                    INSERT INTO VoteResults (voting_id, option_id, list_id, vote_count, last_updated)
-                    VALUES (%s, %s, %s, 1, %s)
-                    ON CONFLICT (voting_id, option_id, list_id)
-                    DO UPDATE SET vote_count = VoteResults.vote_count + 1, last_updated = %s
-                """, (voting_id, option_id, list_id, datetime.now(), datetime.now()))
+                    UPDATE VoteResults 
+                    SET vote_count = vote_count + 1, 
+                        last_updated = %s
+                    WHERE voting_id = %s 
+                    AND option_id = %s 
+                    AND list_id = %s
+                """, (datetime.now(), voting_id, option_id, list_id))
+
+                # 如果没有更新到任何行（即记录不存在），则插入新记录
+                if cursor.rowcount == 0:
+                    cursor.execute("""
+                        INSERT INTO VoteResults (voting_id, option_id, list_id, vote_count, last_updated)
+                        VALUES (%s, %s, %s, 1, %s)
+                    """, (voting_id, option_id, list_id, datetime.now()))
 
         # 更新列表百分比
         cursor.execute("""
@@ -338,15 +397,10 @@ def submit_vote():
 
 # API-6
 # 查看具体某个投票
-@app.route('/voting-detail', methods=['GET', 'POST'])
+@app.route('/voting-detail', methods=['GET'])
 def get_voting_info():
-    if request.method == 'POST':
-        data = request.get_json()
-        voting_id = data.get('voting_id')
-        user_id = data.get('user_id')
-    elif request.method == 'GET':
-        voting_id = request.args.get('voting_id')
-        user_id = request.args.get('user_id')
+    voting_id = request.args.get('voting_id')
+    user_id = request.args.get('user_id')
 
     if not voting_id or not user_id:
         return jsonify({"error": "voting_id and user_id are required"}), 400
@@ -354,17 +408,18 @@ def get_voting_info():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 查询用户是否已经投票
-    cursor.execute("""
-        SELECT COUNT(*) FROM Votes
-        WHERE user_id = %s AND voting_id = %s AND is_voted = TRUE
-    """, (user_id, voting_id))
-    vote_count = cursor.fetchone()[0]
-
-    is_voted = vote_count > 0
-
 
     try:
+        print(f"Checking votes for user_id: {user_id}, voting_id: {voting_id}")
+        # 检查用户是否已经投票
+        cursor.execute("""
+            SELECT COUNT(*) FROM Votes
+            WHERE user_id = %s AND voting_id = %s AND is_voted = TRUE
+        """, (user_id, voting_id))
+        vote_count = cursor.fetchone()[0]
+        print("vote_count ==== ", vote_count)
+        is_voted = vote_count > 0
+
         # 查询投票信息
         cursor.execute("""
             SELECT voting_id, voting_name, voting_description, voting_date
@@ -404,6 +459,7 @@ def get_voting_info():
                     "option_type": option[2],
                     "option_list": []
                 }
+            # list_percentage 用于显示投票结果
             option_dict[option_id]["option_list"].append({
                 "list_id": option[3],
                 "list_title": option[4]

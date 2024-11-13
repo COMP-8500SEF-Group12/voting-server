@@ -1,12 +1,16 @@
-import psycopg2
+# PG版本 16
+import pg8000
 
-# PG版本 17.0.1
+# 数据库连接参数
+def get_db_connection():
+    db_params = {
+        'database': 'postgres',
+        'user': 'postgres',
+        'password': 'group12',
+        'host': '134.209.107.254',
+        'port': 5432
+    }
 
-def connect():
-    return psycopg2.connect(
-        host="localhost",
-        database="voting_system",
-        user="username",
-        password="password"
-    )
+    connection = pg8000.connect(**db_params)
+    return connection
 

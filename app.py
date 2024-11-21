@@ -25,13 +25,24 @@ def login():
     cur = conn.cursor()
 
     try:
+        # 查询用户是否存在
         cur.execute('SELECT user_id FROM Users WHERE user_id = %s', (user_id,))
         user = cur.fetchone()
 
         if user:
-            return jsonify({'user_id': user_id, 'status': 1,'message':''})
+            # 用户已存在
+            return jsonify({'user_id': user_id, 'status': 1, 'message': ''})
         else:
-            return jsonify({'user_id': user_id, 'status': 0,'message':''})
+            # 用户不存在，检查 user_id 是否符合 s+7位数字的格式，大写S不可以
+            if re.match(r'^s\d{7}$', user_id):
+                # 插入新用户
+                cur.execute('INSERT INTO Users (user_id, has_vote_permission) VALUES (%s, TRUE)', (user_id,))
+                conn.commit()  
+
+                return jsonify({'user_id': user_id, 'status': 1, 'message': ''})
+            else:
+                # user_id 格式不正确
+                return jsonify({'user_id': user_id, 'status': 0, 'message': 'Invalid user ID format'}), 400
     except Exception as e:
         return jsonify({'user_id': user_id, 'status': 0, 'message': str(e)}), 500
     finally:

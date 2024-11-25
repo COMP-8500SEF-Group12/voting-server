@@ -273,8 +273,8 @@ def get_db_connection():
     db_params = {
         'database': 'postgres',
         'user': 'postgres',
-        'password': 'group12',
-        'host': '134.209.107.254',
+        'password': 'YOUR_DB_PASSWORD',
+        'host': 'YOUR_HOST',
         'port': 5432
     }
 

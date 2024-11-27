@@ -1,4 +1,4 @@
-# Voting System API
+# Online Voting System - Backend
 
 This is a Flask-based Voting System API that allows users to log in, create votes, view voting lists, delete votes, check voting results, submit votes, and view voting details.
 
